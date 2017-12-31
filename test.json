@@ -1,0 +1,10 @@
+{
+    "Folders": [
+        "/home/user/Documents"
+    ],
+    "Uid": 1000,
+    "Gid": 1000,
+    "Storage": "/home/user/.config/resilio",
+    "Ip": "240.0.0.2",
+    "Network": "docker-to-lan"
+}
