@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"regexp"
 	"strconv"
 	"strings"
-	//	"os/user"
 )
 
 // The structure of the config file
@@ -31,6 +31,13 @@ type VolumeMount struct {
 	//	Readonly bool
 }
 
+// Checks if an Commandline Injection is attempted
+// Returns true, if the string is suspicious. false otherwise
+func detectCmdInjection(input string) bool {
+	re := regexp.MustCompile("(\"|')")
+	return re.FindStringIndex(input) != nil
+}
+
 // Checks if the passed JSON is safe to work with, e.g. contains all needed fields.
 // Returns true, if the JSON is okay. false otherwise.
 func validateConfig(c *Config) error {
@@ -38,12 +45,29 @@ func validateConfig(c *Config) error {
 	if c.Storage == "" {
 		return errors.New("'Storage' field is required")
 	}
+	if detectCmdInjection(c.Storage) {
+		return errors.New("Possible Commandline Injection found in 'Storage'")
+	}
 
 	// If we have Ip, then we need Network too
 	if c.Ip != "" && c.Network == "" {
 		return errors.New("The field 'Ip' requires 'Network'")
 	}
+	if detectCmdInjection(c.Ip) {
+		return errors.New("Possible Commandline Injection found in 'Ip'")
+	}
+	if detectCmdInjection(c.Network) {
+		return errors.New("Possible Commandline Injection found in 'Network'")
+	}
 
+	// Are the folders suspicious
+	for i := 0; i < len(c.Folders); i++ {
+		if detectCmdInjection(c.Folders[i]) {
+			return errors.New("Possible Commandline Injection found in 'Folders'")
+		}
+	}
+
+	// Do we got an UID and GID?
 	if c.Uid == 0 || c.Gid == 0 {
 		return errors.New("Field the fields 'Uid' and 'Gid' are required")
 	}
