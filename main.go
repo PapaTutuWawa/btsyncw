@@ -5,9 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"strconv"
 	"strings"
-	//	"os/exec"
 	//	"os/user"
 )
 
@@ -52,33 +52,37 @@ func validateConfig(c *Config) error {
 }
 
 // Builds the docker command from the config and the mounts
-func buildCommand(c *Config, mounts []VolumeMount) string {
-	ret := "docker run --name Sync --rm "
+func buildCommand(c *Config, mounts []VolumeMount) *exec.Cmd {
+	args := make([]string, 0)
+	args = []string{"run", "--name", "Sync", "--rm"}
 
 	// Append all volume mounts
 	for i := 0; i < len(mounts); i++ {
 		// TODO: Maybe use templates
-		ret += "--volume=\"" + mounts[i].From + ":" + mounts[i].To + "\" "
+		args = append(args, "--volume=\""+mounts[i].From+":"+mounts[i].To+"\"")
 	}
 
 	// Do we have an Ip
 	if c.Network != "" {
-		ret += "--net=" + c.Network + " "
+		args = append(args, "--net="+c.Network)
 
 		// Do we even specify an IP?
 		if c.Ip != "" {
-			ret += "--ip=" + c.Ip + " "
+			args = append(args, "--ip="+c.Ip)
 		}
 	}
 
 	// Append the UID and the GID as environment variables
-	ret += "--env=\"USERID=" + strconv.FormatInt(c.Uid, 10) + "\" "
-	ret += "--env=\"GROUPID=" + strconv.FormatInt(c.Gid, 10) + "\" "
+	args = append(args, "--env=\"USERID="+strconv.FormatInt(c.Uid, 10)+"\"")
+	args = append(args, "--env=\"GROUPID="+strconv.FormatInt(c.Gid, 10)+"\"")
+
+	// Start the container detached
+	args = append(args, "-d")
 
 	// Append the image
-	ret += "sync:slim"
+	args = append(args, "sync:slim")
 
-	return ret
+	return exec.Command("docker", args...)
 }
 
 func main() {
@@ -132,7 +136,7 @@ func main() {
 
 		mounts = append(mounts, VolumeMount{
 			c.Folders[fi],
-			"/mnt/" + dirname,
+			"/mnt/folders/" + dirname,
 		})
 	}
 	// We append the storage path to make our life easier
@@ -141,6 +145,11 @@ func main() {
 		"/mnt/config",
 	})
 
-	// Build the command
+	// Build the command and execute it
 	fmt.Println(buildCommand(&c, mounts))
+	cmd := buildCommand(&c, mounts)
+	err = cmd.Run()
+	if err != nil {
+		fmt.Printf("Failed to start the continer: %v\n", err)
+	}
 }
