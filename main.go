@@ -59,7 +59,7 @@ func buildCommand(c *Config, mounts []VolumeMount) *exec.Cmd {
 	// Append all volume mounts
 	for i := 0; i < len(mounts); i++ {
 		// TODO: Maybe use templates
-		args = append(args, "--volume=\""+mounts[i].From+":"+mounts[i].To+"\"")
+		args = append(args, "--volume="+mounts[i].From+":"+mounts[i].To)
 	}
 
 	// Do we have an Ip
@@ -146,10 +146,14 @@ func main() {
 	})
 
 	// Build the command and execute it
-	fmt.Println(buildCommand(&c, mounts))
+	// fmt.Println(buildCommand(&c, mounts))
 	cmd := buildCommand(&c, mounts)
 	err = cmd.Run()
 	if err != nil {
 		fmt.Printf("Failed to start the continer: %v\n", err)
+		os.Exit(1)
 	}
+
+	// Well, we (maybe) did it
+	fmt.Println("Started the Resilio Container")
 }
