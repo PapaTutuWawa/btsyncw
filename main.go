@@ -5,10 +5,21 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/docker/docker/api/types"
+	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/mount"
+	"github.com/docker/docker/api/types/network"
+	"github.com/docker/docker/client"
+	"golang.org/x/net/context"
+)
+
+const (
+	DockerImage    string = "sync"
+	DockerImageTag string = "slim"
 )
 
 // The structure of the config file
@@ -24,18 +35,58 @@ type Config struct {
 	Gid int64
 }
 
-// Just for practice
-type VolumeMount struct {
-	From string
-	To   string
-	//	Readonly bool
-}
-
 // Checks if an Commandline Injection is attempted
 // Returns true, if the string is suspicious. false otherwise
 func detectCmdInjection(input string) bool {
 	re := regexp.MustCompile("(\"|')")
 	return re.FindStringIndex(input) != nil
+}
+
+// Construct an array of environment variables that the container needs
+func buildEnvVars(c *Config) []string {
+	return []string{
+		"USERID=" + strconv.FormatInt(c.Uid, 10),
+		"GROUPID=" + strconv.FormatInt(c.Gid, 10),
+	}
+}
+
+// Constructs the NetworkingConfig based on the provided Config
+func buildNetConfig(c *Config) network.NetworkingConfig {
+	ret := network.NetworkingConfig{}
+
+	// Apply the IP Flag *only* if we got both an IP and a Network
+	if c.Ip != "" && c.Network != "" {
+		ret.EndpointsConfig = map[string]*network.EndpointSettings{
+			c.Network: &network.EndpointSettings{
+				IPAddress: c.Ip,
+			},
+		}
+	}
+
+	return ret
+}
+
+// Constructs the HostConfig based on the provided Config and the mounts
+func buildHostConfig(c *Config, mounts *[]mount.Mount) container.HostConfig {
+	ret := container.HostConfig{
+		Mounts:     *mounts,
+		AutoRemove: true,
+	}
+
+	// Apply the NetworkMode Flag only, if we have a Network specified
+	if c.Network != "" {
+		ret.NetworkMode = container.NetworkMode(c.Network)
+	}
+
+	return ret
+}
+
+// Constructs the container's config based on the provided Config
+func buildContainerConfig(c *Config) container.Config {
+	return container.Config{
+		Image: DockerImage + ":" + DockerImageTag,
+		Env:   buildEnvVars(c),
+	}
 }
 
 // Checks if the passed JSON is safe to work with, e.g. contains all needed fields.
@@ -73,40 +124,6 @@ func validateConfig(c *Config) error {
 	}
 
 	return nil
-}
-
-// Builds the docker command from the config and the mounts
-func buildCommand(c *Config, mounts []VolumeMount) *exec.Cmd {
-	args := make([]string, 0)
-	args = []string{"run", "--name", "Sync", "--rm"}
-
-	// Append all volume mounts
-	for i := 0; i < len(mounts); i++ {
-		// TODO: Maybe use templates
-		args = append(args, "--volume="+mounts[i].From+":"+mounts[i].To)
-	}
-
-	// Do we have an Ip
-	if c.Network != "" {
-		args = append(args, "--net="+c.Network)
-
-		// Do we even specify an IP?
-		if c.Ip != "" {
-			args = append(args, "--ip="+c.Ip)
-		}
-	}
-
-	// Append the UID and the GID as environment variables
-	args = append(args, "--env=\"USERID="+strconv.FormatInt(c.Uid, 10)+"\"")
-	args = append(args, "--env=\"GROUPID="+strconv.FormatInt(c.Gid, 10)+"\"")
-
-	// Start the container detached
-	args = append(args, "-d")
-
-	// Append the image
-	args = append(args, "sync:slim")
-
-	return exec.Command("docker", args...)
 }
 
 func main() {
@@ -152,32 +169,51 @@ func main() {
 	}
 
 	// Turn the paths into VolumeMounts
-	mounts := make([]VolumeMount, 0)
+	mounts := make([]mount.Mount, 0)
 	for fi := 0; fi < len(c.Folders); fi++ {
 		// Find out the dirname (Though there's got to be a better way...)
 		splitPath := strings.Split(c.Folders[fi], "/")
 		dirname := splitPath[len(splitPath)-1]
 
-		mounts = append(mounts, VolumeMount{
-			c.Folders[fi],
-			"/mnt/folders/" + dirname,
+		mounts = append(mounts, mount.Mount{
+			Type:   mount.TypeBind,
+			Source: c.Folders[fi],
+			Target: "/mnt/folders/" + dirname,
 		})
 	}
 	// We append the storage path to make our life easier
-	mounts = append(mounts, VolumeMount{
-		c.Storage,
-		"/mnt/config",
+	mounts = append(mounts, mount.Mount{
+		Type:   mount.TypeBind,
+		Source: c.Storage,
+		Target: "/mnt/config",
 	})
 
-	// Build the command and execute it
-	// fmt.Println(buildCommand(&c, mounts))
-	cmd := buildCommand(&c, mounts)
-	err = cmd.Run()
+	// Connect to the docker daemon
+	ctx := context.Background()
+	cli, err := client.NewEnvClient()
 	if err != nil {
-		fmt.Printf("Failed to start the continer: %v\n", err)
+		fmt.Printf("Failed to connect to docker: %v\n", err)
 		os.Exit(1)
 	}
 
-	// Well, we (maybe) did it
+	// Create the neccessary configuration
+	containerConfig := buildContainerConfig(&c)
+	hostConfig := buildHostConfig(&c, &mounts)
+	netConfig := buildNetConfig(&c)
+
+	// Create the container
+	resp, err := cli.ContainerCreate(ctx, &containerConfig, &hostConfig, &netConfig, "Sync")
+	if err != nil {
+		fmt.Printf("Failed to create container: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Start the container
+	if err = cli.ContainerStart(ctx, resp.ID, types.ContainerStartOptions{}); err != nil {
+		fmt.Printf("Failed to start container: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Well, we did it
 	fmt.Println("Started the Resilio Container")
 }
